@@ -1,3 +1,8 @@
+## v0.0.5 (2026-09-16)
+- [release] 0.0.5 fix show captured without photos (use glimpse) (31572d0)
+- change camera preference to open captured image (0d69ad0)
+- chore: update to v0.0.4 [skip ci] (a70cd17)
+
 ## v0.0.4 (2026-09-16)
 - [release] 0.0.4 (72d06e8)
 - ci: changelog sebagai URL untuk KSU Next (18fbee7)
