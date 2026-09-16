@@ -201,21 +201,29 @@ jobs:
           CODE="${{ github.run_number }}"
           REPO="${{ github.repository }}"
           ZIP_URL="https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME"
-          CHANGELOG_JSON="$(python3 -c 'import json; print(json.dumps(open("changelog.txt").read().strip()))')"
+          CHANGELOG_URL="https://raw.githubusercontent.com/$REPO/main/CHANGELOG.md"
+          # KSU Next fetch field changelog sebagai URL, jadi catat changelog ke file
+          # dan isi field-nya dengan URL mentah file tersebut (bukan teks langsung)
+          ENTRY="## $TAG ($(date -u +%Y-%m-%d))"$'\n'"$(cat changelog.txt)"$'\n'
+          if [ -f CHANGELOG.md ]; then
+            printf '%s\n%s' "$ENTRY" "$(cat CHANGELOG.md)" > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+          else
+            printf '%s\n' "$ENTRY" > CHANGELOG.md
+          fi
           cat > update.json <<EOF
           {
             "version": "$TAG",
             "versionCode": $CODE,
             "zipUrl": "$ZIP_URL",
-            "changelog": $CHANGELOG_JSON
+            "changelog": "$CHANGELOG_URL"
           }
           EOF
           cat update.json
-          # Commit balik update.json + module.prop tanpa memicu rilis baru
+          # Commit balik update.json + module.prop + CHANGELOG.md tanpa memicu rilis baru
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || true
-          git add update.json module.prop
+          git add update.json module.prop CHANGELOG.md
           if git diff --staged --quiet; then
             echo "Tidak ada perubahan untuk di-commit."
           else
@@ -235,21 +243,29 @@ jobs:
           CODE="${{ github.run_number }}"
           REPO="${{ github.repository }}"
           ZIP_URL="https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME"
-          CHANGELOG_JSON="$(python3 -c 'import json; print(json.dumps(open("changelog.txt").read().strip()))')"
+          CHANGELOG_URL="https://raw.githubusercontent.com/$REPO/main/CHANGELOG-test.md"
+          # KSU Next fetch field changelog sebagai URL, jadi catat changelog ke file
+          # dan isi field-nya dengan URL mentah file tersebut (bukan teks langsung)
+          ENTRY="## $TAG ($(date -u +%Y-%m-%d))"$'\n'"$(cat changelog.txt)"$'\n'
+          if [ -f CHANGELOG-test.md ]; then
+            printf '%s\n%s' "$ENTRY" "$(cat CHANGELOG-test.md)" > CHANGELOG-test.md.tmp && mv CHANGELOG-test.md.tmp CHANGELOG-test.md
+          else
+            printf '%s\n' "$ENTRY" > CHANGELOG-test.md
+          fi
           cat > update-test.json <<EOF
           {
             "version": "$TAG",
             "versionCode": $CODE,
             "zipUrl": "$ZIP_URL",
-            "changelog": $CHANGELOG_JSON
+            "changelog": "$CHANGELOG_URL"
           }
           EOF
           cat update-test.json
-          # Commit balik HANYA update-test.json (module.prop di repo tetap di kanal stabil)
+          # Commit balik HANYA update-test.json + CHANGELOG-test.md (module.prop di repo tetap di kanal stabil)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || true
-          git add update-test.json
+          git add update-test.json CHANGELOG-test.md
           if git diff --staged --quiet; then
             echo "Tidak ada perubahan untuk di-commit."
           else
