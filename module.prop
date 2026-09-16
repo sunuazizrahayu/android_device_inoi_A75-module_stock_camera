@@ -1,0 +1,6 @@
+id=inoi_a75_sxs_camera_port
+name=Inoi A75 SXS_Camera Port Final
+version=v1.14
+versionCode=15
+author=user
+description=Sama seperti v1.13, tambah file /system/etc/logo_cam_icon.png -- file logo watermark yang direferensi eksplisit di komentar customized_camera_preferences.xml ("perlu file ini terintegrasi baru watermark berfungsi"), sebelumnya terlewat karena pengecekan awal salah.

@@ -1,0 +1,3 @@
+allow cameraserver vendor_default_prop file { open read getattr map }
+allow untrusted_app qemu_hw_prop file { open read getattr map }
+allow untrusted_app_32 qemu_hw_prop file { open read getattr map }
