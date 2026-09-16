@@ -1,6 +1,6 @@
 {
-  "version": "v0.0.0",
-  "versionCode": 1,
-  "zipUrl": "https://github.com/sunuazizrahayu/android_device_inoi_A75-module_stock_camera/releases/download/0.0.0/inoi_a75_sxs_camera_port-0.0.0.zip",
-  "changelog": "initial placeholder — akan diisi otomatis oleh workflow release"
+  "version": "v0.0.3",
+  "versionCode": 4,
+  "zipUrl": "https://github.com/sunuazizrahayu/android_device_inoi_A75-module_stock_camera/releases/download/v0.0.3/inoi_a75_sxs_camera_port-v0.0.3.zip",
+  "changelog": "- [release] 0.0.3 fix updater for stable and test (30e0abc)"
 }

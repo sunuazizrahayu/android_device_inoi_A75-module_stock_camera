@@ -1,7 +1,7 @@
 id=inoi_a75_sxs_camera_port
 name=Inoi A75 SXS_Camera Port for AOSP / GSI
-version=0.0.1
-versionCode=2
+version=v0.0.3
+versionCode=4
 author=sunuazizrahayu, FahrulKZL
 description=INOI A75 Camera Stock ROM for AOSP / GSI & Enhanced Gallery
 updateJson=https://raw.githubusercontent.com/sunuazizrahayu/android_device_inoi_A75-module_stock_camera/main/update.json
