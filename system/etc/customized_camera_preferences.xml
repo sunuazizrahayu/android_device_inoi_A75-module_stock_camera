@@ -397,7 +397,7 @@
     <!-- 设为on时，表示打开图库预览时，是进入的Google Photos应用 -->
     <Item>
         <key>pref_camera_launch_photos_app</key>
-        <defaultValue>on</defaultValue>
+        <defaultValue>off</defaultValue>
     </Item>
     <!-- 模式切换栏的切换模式 -->
     <!-- 取值范围：{FLING,SCROLL},默认为FLING -->

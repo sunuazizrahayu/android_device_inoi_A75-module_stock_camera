@@ -103,6 +103,9 @@ jobs:
             exit 1
           fi
           file system/app/SXS_Camera/SXS_Camera.apk || true
+          # Hapus .keep supaya folder hanya berisi APK
+          rm -f system/app/SXS_Camera/.keep
+          ls -la system/app/SXS_Camera/
 
       - name: Prepare module.prop (version + versionCode)
         if: steps.ver.outputs.do_release == 'true'
