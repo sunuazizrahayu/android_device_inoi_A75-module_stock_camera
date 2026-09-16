@@ -22,28 +22,48 @@ jobs:
         run: |
           MSG="$(git log -1 --pretty=%B)"
           echo "Commit message: $MSG"
-          # Cocokkan 2 pola (case-insensitive):
-          #   1) [release x.x.x] / [release v1.2]  (versi di dalam kurung)
-          #   2) [release] x.x.x / [release]: v1.2.3 (versi di luar kurung)
-          # Contoh valid: [release 1.0.1], [Release v1.2], [release] 1.0.1, [release]: v1.2.3
+          # Dua channel (case-insensitive), masing-masing 2 pola:
+          #   release (stabil):      [release 1.0.1], [Release v1.2], [release] 1.0.1, [release]: v1.2.3
+          #   test (pre-release):    [test 1.2.4], [Test v1.2], [test] 1.2.4, [test]: v1.2.4
+          # Hasil tag/judul:  release 1.2.3 -> v1.2.3  ;  test 1.2.4 -> v1.2.4-test
+          VER_RE='v?[0-9]+\.[0-9]+(\.[0-9]+)?'
           VERSION=""
-          if echo "$MSG" | grep -qiE '\[release[[:space:]]+v?[0-9]+\.[0-9]+(\.[0-9]+)?\]'; then
-            VERSION="$(echo "$MSG" | grep -oiE '\[release[[:space:]]+v?[0-9]+\.[0-9]+(\.[0-9]+)?\]' | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
-          elif echo "$MSG" | grep -qiE '\[release\][[:space:]:-]*v?[0-9]+\.[0-9]+(\.[0-9]+)?'; then
-            VERSION="$(echo "$MSG" | grep -oiE '\[release\][[:space:]:-]*v?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+          CHANNEL=""
+          if echo "$MSG" | grep -qiE "\[release[[:space:]]+${VER_RE}\]"; then
+            VERSION="$(echo "$MSG" | grep -oiE "\[release[[:space:]]+${VER_RE}\]" | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+            CHANNEL="release"
+          elif echo "$MSG" | grep -qiE "\[release\][[:space:]:-]*${VER_RE}"; then
+            VERSION="$(echo "$MSG" | grep -oiE "\[release\][[:space:]:-]*${VER_RE}" | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+            CHANNEL="release"
+          elif echo "$MSG" | grep -qiE "\[test[[:space:]]+${VER_RE}\]"; then
+            VERSION="$(echo "$MSG" | grep -oiE "\[test[[:space:]]+${VER_RE}\]" | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+            CHANNEL="test"
+          elif echo "$MSG" | grep -qiE "\[test\][[:space:]:-]*${VER_RE}"; then
+            VERSION="$(echo "$MSG" | grep -oiE "\[test\][[:space:]:-]*${VER_RE}" | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+            CHANNEL="test"
           fi
-          if [ -n "$VERSION" ]; then
+          if [ -n "$VERSION" ] && [ -n "$CHANNEL" ]; then
+            if [ "$CHANNEL" = "test" ]; then
+              TAG="v$VERSION-test"
+              PRE="true"
+            else
+              TAG="v$VERSION"
+              PRE="false"
+            fi
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+            echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
             echo "do_release=true" >> "$GITHUB_OUTPUT"
-            echo "Detected release version: $VERSION"
+            echo "Detected $CHANNEL version: $VERSION -> tag $TAG"
           else
             echo "do_release=false" >> "$GITHUB_OUTPUT"
-            echo "No [release x.x.x] or [release] x.x.x tag in commit message, skipping."
+            echo "No [release ...] or [test ...] tag in commit message, skipping."
           fi
 
       - name: Stop if not a release commit
         if: steps.ver.outputs.do_release != 'true'
-        run: echo "Bukan commit rilis, workflow berhenti."
+        run: echo "Bukan commit rilis/test, workflow berhenti."
 
       - name: Resolve APK URL
         id: apk
@@ -87,11 +107,11 @@ jobs:
       - name: Prepare module.prop (version + versionCode)
         if: steps.ver.outputs.do_release == 'true'
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
           # versionCode pakai run_number agar selalu naik (syarat Magisk/KernelSU)
           CODE="${{ github.run_number }}"
-          echo "Setting version=v$VERSION versionCode=$CODE"
-          sed -i -E "s/^version=.*/version=v$VERSION/" module.prop
+          echo "Setting version=$TAG versionCode=$CODE"
+          sed -i -E "s/^version=.*/version=$TAG/" module.prop
           sed -i -E "s/^versionCode=.*/versionCode=$CODE/" module.prop
           # Pastikan updateJson ada (untuk auto-update di Magisk/KernelSU)
           REPO="${{ github.repository }}"
@@ -106,10 +126,10 @@ jobs:
       - name: Build flashable zip
         if: steps.ver.outputs.do_release == 'true'
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
           MODID="$(grep -E '^id=' module.prop | cut -d= -f2 | tr -d ' \t\r\n')"
           [ -n "$MODID" ] || MODID="magisk-module"
-          ZIP_NAME="${MODID}-${VERSION}.zip"
+          ZIP_NAME="${MODID}-${TAG}.zip"
           echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
           # Bungkus isi modul (tanpa .git, .github, apk-url, dan update.json)
           FILES="module.prop service.sh customize.sh sepolicy.rule META-INF system"
@@ -129,7 +149,7 @@ jobs:
       - name: Build changelog
         if: steps.ver.outputs.do_release == 'true'
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
           # Ambil log sejak tag sebelumnya (kalau ada), kalau tidak ambil 10 commit terakhir
           PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
           if [ -n "$PREV_TAG" ]; then
@@ -138,43 +158,49 @@ jobs:
           else
             git log -10 --pretty='- %s (%h)' > changelog.txt
           fi
-          cat changelog.txt || echo "- rilis $VERSION" > changelog.txt
+          cat changelog.txt || echo "- rilis $TAG" > changelog.txt
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (stable / pre-release)
         if: steps.ver.outputs.do_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ZIP_NAME: ${{ env.ZIP_NAME }}
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          PRE="${{ steps.ver.outputs.prerelease }}"
           # Hapus rilis/tag lama dgn versi sama supaya re-run aman
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Rilis $VERSION sudah ada — hapus dulu untuk rebuild."
-            gh release delete "$VERSION" -y
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Rilis $TAG sudah ada — hapus dulu untuk rebuild."
+            gh release delete "$TAG" -y
           fi
-          if git rev-parse "$VERSION" >/dev/null 2>&1; then
-            git push --delete origin "$VERSION" || true
-            git tag -d "$VERSION" || true
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            git push --delete origin "$TAG" || true
+            git tag -d "$TAG" || true
           fi
-          gh release create "$VERSION" \
-            --title "$VERSION" \
+          FLAGS=""
+          if [ "$PRE" = "true" ]; then FLAGS="--prerelease"; echo "Pre-release (test channel)."; fi
+          # shellcheck disable=SC2086
+          gh release create "$TAG" \
+            --title "$TAG" \
             --notes-file changelog.txt \
+            $FLAGS \
             "$ZIP_NAME"
 
       - name: Update update.json for Magisk/KSU auto-update
-        if: steps.ver.outputs.do_release == 'true'
+        # Hanya untuk channel stabil — build test tidak menimpa kanal update stabil
+        if: steps.ver.outputs.do_release == 'true' && steps.ver.outputs.channel != 'test'
         env:
           GH_TOKEN: ${{ github.token }}
           ZIP_NAME: ${{ env.ZIP_NAME }}
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
           CODE="${{ github.run_number }}"
           REPO="${{ github.repository }}"
-          ZIP_URL="https://github.com/$REPO/releases/download/$VERSION/$ZIP_NAME"
+          ZIP_URL="https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME"
           CHANGELOG_JSON="$(python3 -c 'import json; print(json.dumps(open("changelog.txt").read().strip()))')"
           cat > update.json <<EOF
           {
-            "version": "v$VERSION",
+            "version": "$TAG",
             "versionCode": $CODE,
             "zipUrl": "$ZIP_URL",
             "changelog": $CHANGELOG_JSON
@@ -189,7 +215,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "Tidak ada perubahan untuk di-commit."
           else
-            # PENTING: pesan ini TIDAK mengandung [release ...] supaya tidak loop
-            git commit -m "chore: update to v$VERSION [skip ci]"
+            # PENTING: pesan ini TIDAK mengandung [release ...]/[test ...] supaya tidak loop
+            git commit -m "chore: update to $TAG [skip ci]"
             git push origin HEAD:main
           fi
