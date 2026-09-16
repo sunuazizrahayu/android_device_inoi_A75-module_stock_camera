@@ -1,0 +1,195 @@
+name: Release Module
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse version from commit message
+        id: ver
+        run: |
+          MSG="$(git log -1 --pretty=%B)"
+          echo "Commit message: $MSG"
+          # Cocokkan 2 pola (case-insensitive):
+          #   1) [release x.x.x] / [release v1.2]  (versi di dalam kurung)
+          #   2) [release] x.x.x / [release]: v1.2.3 (versi di luar kurung)
+          # Contoh valid: [release 1.0.1], [Release v1.2], [release] 1.0.1, [release]: v1.2.3
+          VERSION=""
+          if echo "$MSG" | grep -qiE '\[release[[:space:]]+v?[0-9]+\.[0-9]+(\.[0-9]+)?\]'; then
+            VERSION="$(echo "$MSG" | grep -oiE '\[release[[:space:]]+v?[0-9]+\.[0-9]+(\.[0-9]+)?\]' | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+          elif echo "$MSG" | grep -qiE '\[release\][[:space:]:-]*v?[0-9]+\.[0-9]+(\.[0-9]+)?'; then
+            VERSION="$(echo "$MSG" | grep -oiE '\[release\][[:space:]:-]*v?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+          fi
+          if [ -n "$VERSION" ]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "do_release=true" >> "$GITHUB_OUTPUT"
+            echo "Detected release version: $VERSION"
+          else
+            echo "do_release=false" >> "$GITHUB_OUTPUT"
+            echo "No [release x.x.x] or [release] x.x.x tag in commit message, skipping."
+          fi
+
+      - name: Stop if not a release commit
+        if: steps.ver.outputs.do_release != 'true'
+        run: echo "Bukan commit rilis, workflow berhenti."
+
+      - name: Resolve APK URL
+        id: apk
+        if: steps.ver.outputs.do_release == 'true'
+        env:
+          VARS_URL: ${{ vars.SXS_APK_URL }}
+        run: |
+          URL=""
+          if [ -f "apk-url.txt" ]; then
+            URL="$(tr -d ' \t\r\n' < apk-url.txt)"
+            echo "APK URL dari apk-url.txt"
+          fi
+          if [ -z "$URL" ] && [ -n "$VARS_URL" ]; then
+            URL="$VARS_URL"
+            echo "APK URL dari repo Variable SXS_APK_URL"
+          fi
+          if [ -z "$URL" ]; then
+            echo "::error::APK URL tidak ditemukan. Isi file apk-url.txt ATAU set repo Variable SXS_APK_URL (Settings > Secrets and variables > Actions > Variables)."
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          # mask URL kalau mengandung token
+          echo "::add-mask::$URL" || true
+
+      - name: Download APK
+        if: steps.ver.outputs.do_release == 'true'
+        env:
+          APK_URL: ${{ steps.apk.outputs.url }}
+        run: |
+          mkdir -p system/app/SXS_Camera
+          echo "Mengunduh APK..."
+          curl -fSL --retry 3 --connect-timeout 30 "$APK_URL" -o system/app/SXS_Camera/SXS_Camera.apk
+          ls -lh system/app/SXS_Camera/SXS_Camera.apk
+          SIZE="$(stat -c%s system/app/SXS_Camera/SXS_Camera.apk)"
+          if [ "$SIZE" -lt 1048576 ]; then
+            echo "::error::APK hasil download mencurigakan (size=$SIZE bytes < 1MB)."
+            exit 1
+          fi
+          file system/app/SXS_Camera/SXS_Camera.apk || true
+
+      - name: Prepare module.prop (version + versionCode)
+        if: steps.ver.outputs.do_release == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # versionCode pakai run_number agar selalu naik (syarat Magisk/KernelSU)
+          CODE="${{ github.run_number }}"
+          echo "Setting version=v$VERSION versionCode=$CODE"
+          sed -i -E "s/^version=.*/version=v$VERSION/" module.prop
+          sed -i -E "s/^versionCode=.*/versionCode=$CODE/" module.prop
+          # Pastikan updateJson ada (untuk auto-update di Magisk/KernelSU)
+          REPO="${{ github.repository }}"
+          RAW_URL="https://raw.githubusercontent.com/$REPO/main/update.json"
+          if grep -q '^updateJson=' module.prop; then
+            sed -i -E "s|^updateJson=.*|updateJson=$RAW_URL|" module.prop
+          else
+            echo "updateJson=$RAW_URL" >> module.prop
+          fi
+          cat module.prop
+
+      - name: Build flashable zip
+        if: steps.ver.outputs.do_release == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          MODID="$(grep -E '^id=' module.prop | cut -d= -f2 | tr -d ' \t\r\n')"
+          [ -n "$MODID" ] || MODID="magisk-module"
+          ZIP_NAME="${MODID}-${VERSION}.zip"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          # Bungkus isi modul (tanpa .git, .github, apk-url, dan update.json)
+          FILES="module.prop service.sh customize.sh sepolicy.rule META-INF system"
+          INCLUDE=""
+          for f in $FILES; do
+            if [ -e "$f" ]; then INCLUDE="$INCLUDE $f"; else echo "Lewati (tidak ada): $f"; fi
+          done
+          # sertakan action.sh / post-fs-data.sh / uninstall.sh / system.prop kalau nanti ditambahkan
+          for f in action.sh post-fs-data.sh uninstall.sh system.prop; do
+            if [ -e "$f" ]; then INCLUDE="$INCLUDE $f"; fi
+          done
+          # shellcheck disable=SC2086
+          zip -r9 "$ZIP_NAME" $INCLUDE -x '*.git*' '*.github*' 'update.json' '*.DS_Store*'
+          echo "--- isi zip ---"
+          unzip -l "$ZIP_NAME"
+
+      - name: Build changelog
+        if: steps.ver.outputs.do_release == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # Ambil log sejak tag sebelumnya (kalau ada), kalau tidak ambil 10 commit terakhir
+          PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
+          if [ -n "$PREV_TAG" ]; then
+            echo "Prev tag: $PREV_TAG"
+            git log "$PREV_TAG..HEAD" --pretty='- %s (%h)' > changelog.txt
+          else
+            git log -10 --pretty='- %s (%h)' > changelog.txt
+          fi
+          cat changelog.txt || echo "- rilis $VERSION" > changelog.txt
+
+      - name: Create GitHub Release
+        if: steps.ver.outputs.do_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_NAME: ${{ env.ZIP_NAME }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # Hapus rilis/tag lama dgn versi sama supaya re-run aman
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Rilis $VERSION sudah ada — hapus dulu untuk rebuild."
+            gh release delete "$VERSION" -y
+          fi
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            git push --delete origin "$VERSION" || true
+            git tag -d "$VERSION" || true
+          fi
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file changelog.txt \
+            "$ZIP_NAME"
+
+      - name: Update update.json for Magisk/KSU auto-update
+        if: steps.ver.outputs.do_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_NAME: ${{ env.ZIP_NAME }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          CODE="${{ github.run_number }}"
+          REPO="${{ github.repository }}"
+          ZIP_URL="https://github.com/$REPO/releases/download/$VERSION/$ZIP_NAME"
+          CHANGELOG_JSON="$(python3 -c 'import json; print(json.dumps(open("changelog.txt").read().strip()))')"
+          cat > update.json <<EOF
+          {
+            "version": "v$VERSION",
+            "versionCode": $CODE,
+            "zipUrl": "$ZIP_URL",
+            "changelog": $CHANGELOG_JSON
+          }
+          EOF
+          cat update.json
+          # Commit balik update.json + module.prop tanpa memicu rilis baru
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add update.json module.prop
+          if git diff --staged --quiet; then
+            echo "Tidak ada perubahan untuk di-commit."
+          else
+            # PENTING: pesan ini TIDAK mengandung [release ...] supaya tidak loop
+            git commit -m "chore: update to v$VERSION [skip ci]"
+            git push origin HEAD:main
+          fi
