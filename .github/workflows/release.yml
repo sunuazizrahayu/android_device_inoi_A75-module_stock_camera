@@ -108,14 +108,18 @@ jobs:
         if: steps.ver.outputs.do_release == 'true'
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
+          CHANNEL="${{ steps.ver.outputs.channel }}"
           # versionCode pakai run_number agar selalu naik (syarat Magisk/KernelSU)
           CODE="${{ github.run_number }}"
           echo "Setting version=$TAG versionCode=$CODE"
           sed -i -E "s/^version=.*/version=$TAG/" module.prop
           sed -i -E "s/^versionCode=.*/versionCode=$CODE/" module.prop
+          # Kanal update: stabil -> update.json, test -> update-test.json
+          if [ "$CHANNEL" = "test" ]; then JSON_FILE="update-test.json"; else JSON_FILE="update.json"; fi
+          echo "Update channel file: $JSON_FILE"
           # Pastikan updateJson ada (untuk auto-update di Magisk/KernelSU)
           REPO="${{ github.repository }}"
-          RAW_URL="https://raw.githubusercontent.com/$REPO/main/update.json"
+          RAW_URL="https://raw.githubusercontent.com/$REPO/main/$JSON_FILE"
           if grep -q '^updateJson=' module.prop; then
             sed -i -E "s|^updateJson=.*|updateJson=$RAW_URL|" module.prop
           else
@@ -142,7 +146,7 @@ jobs:
             if [ -e "$f" ]; then INCLUDE="$INCLUDE $f"; fi
           done
           # shellcheck disable=SC2086
-          zip -r9 "$ZIP_NAME" $INCLUDE -x '*.git*' '*.github*' 'update.json' '*.DS_Store*'
+          zip -r9 "$ZIP_NAME" $INCLUDE -x '*.git*' '*.github*' 'update*.json' '*.DS_Store*'
           echo "--- isi zip ---"
           unzip -l "$ZIP_NAME"
 
@@ -217,5 +221,39 @@ jobs:
           else
             # PENTING: pesan ini TIDAK mengandung [release ...]/[test ...] supaya tidak loop
             git commit -m "chore: update to $TAG [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      - name: Update update-test.json (test channel)
+        # Hanya untuk channel test — rilis stabil tidak menyentuh kanal test
+        if: steps.ver.outputs.do_release == 'true' && steps.ver.outputs.channel == 'test'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_NAME: ${{ env.ZIP_NAME }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          CODE="${{ github.run_number }}"
+          REPO="${{ github.repository }}"
+          ZIP_URL="https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME"
+          CHANGELOG_JSON="$(python3 -c 'import json; print(json.dumps(open("changelog.txt").read().strip()))')"
+          cat > update-test.json <<EOF
+          {
+            "version": "$TAG",
+            "versionCode": $CODE,
+            "zipUrl": "$ZIP_URL",
+            "changelog": $CHANGELOG_JSON
+          }
+          EOF
+          cat update-test.json
+          # Commit balik HANYA update-test.json (module.prop di repo tetap di kanal stabil)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add update-test.json
+          if git diff --staged --quiet; then
+            echo "Tidak ada perubahan untuk di-commit."
+          else
+            # PENTING: pesan ini TIDAK mengandung [release ...]/[test ...] supaya tidak loop
+            git commit -m "chore: update test channel to $TAG [skip ci]"
             git push origin HEAD:main
           fi
